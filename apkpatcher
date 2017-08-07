@@ -1,0 +1,543 @@
+#!/bin/env python2.7
+# -*- coding: utf-8 -*-
+
+import sys
+import time
+import json
+import shutil
+import requests
+import tempfile
+import os.path
+import argparse
+import subprocess
+
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+def exit(retValue=0):
+    if retValue is 0:
+        print bcolors.OKBLUE + '[*] Exiting... Bye \\o/' + bcolors.ENDC
+    else:
+        print bcolors.FAIL + '[-] Exiting with erros :(' + bcolors.ENDC
+
+    sys.exit(retValue)
+
+def hasSatisfiedDependencies():
+    flag = True
+    
+    sys.stdout.write('[*] Checking dependencies...\n')
+    # Check Frida
+    try:
+        subprocess.check_output(['frida', '--version'])
+    except:
+        flag = False
+        sys.stdout.write(bcolors.FAIL + '[-] Failed. frida is not installed\n' + bcolors.ENDC)
+
+    # Check aapt
+    try:
+        subprocess.check_output(['aapt', 'version'])
+    except:
+        flag = False
+        sys.stdout.write(bcolors.FAIL + '[-] Failed. aapt is not installed\n' + bcolors.ENDC)
+
+    # Check apktool
+    try:
+        subprocess.check_output(['apktool', '--version'])
+    except:
+        flag = False
+        sys.stdout.write(bcolors.FAIL + '[-] Failed. apktool is not installed\n' + bcolors.ENDC)
+
+    # Check unxz
+    try:
+        subprocess.check_output(['unxz', '--version'])
+    except:
+        flag = False
+        sys.stdout.write(bcolors.FAIL + '[-] Failed. unxz is not installed\n' + bcolors.ENDC)
+
+    if 'zip alignment' not in subprocess.check_output(['zipalign;echo'], stderr=subprocess.STDOUT, shell=True).lower():
+        flag = False
+        sys.stdout.write(bcolors.FAIL + '[-] Failed. zipalign is not installed\n' + bcolors.ENDC)
+
+    return flag
+
+def updateFridaGadgets():
+    if not hasSatisfiedDependencies():
+        exit(1)
+
+    sys.stdout.write('[+] Updating frida gadgets\n')
+    fridaVersion = subprocess.check_output(['frida', '--version']).strip()
+    sys.stdout.write('[*] Frida version: ' + fridaVersion + '\n')
+
+    githubLink = 'https://api.github.com/repos/frida/frida/releases'
+
+    response = requests.get(githubLink).text
+    releases = json.loads(response)
+
+    releaseLink = None
+
+    for release in releases:
+        if release['tag_name'] == fridaVersion:
+            releaseLink = release['url']
+            break
+    
+    response = requests.get(releaseLink).text
+    releaseContent = json.loads(response)
+
+    assets = releaseContent['assets']
+
+    listGadgets = []
+    for asset in assets:
+        if 'gadget' in asset['name'] and 'android' in asset['name']:
+            gadget = {}
+            gadget['name'] = asset['name']
+            gadget['url'] = asset['browser_download_url']
+
+            listGadgets.append(gadget)
+    
+    currentFolder = os.path.dirname(os.path.abspath(__file__))
+    gadgetsFolder = os.path.join(currentFolder, 'gadgets')
+    targetFolder = os.path.join(gadgetsFolder, fridaVersion)
+
+    if not os.path.isdir(targetFolder):
+        os.makedirs(targetFolder)
+
+    downloadedFiles = []
+    for gadget in listGadgets:
+        gadgetFilePath = os.path.join(targetFolder, gadget['name'])
+
+        if os.path.isfile(gadgetFilePath.replace('.xz', '')):
+            sys.stdout.write('[*] %s already exists. Skipping.\n' %(gadget['name']))
+        else:
+            download(gadget['url'], gadgetFilePath)
+            downloadedFiles.append(gadgetFilePath)
+
+    sys.stdout.write('[*] Extracting downloaded files...\n')
+
+    for downloadedFile in downloadedFiles:
+        subprocess.check_output(['unxz', downloadedFile])
+
+    sys.stdout.write('[*] Done!\n')
+    
+def download(url, targetPath):
+    fileName = targetPath.split('/')[-1]
+    response = requests.get(url, stream=True)
+    totalLength = response.headers.get('content-length')
+    totalLength = int(totalLength)
+    
+
+    with open(targetPath, 'wb') as f:
+        downloaded = 0
+        
+        sys.stdout.write('\r[+] Downloading %s - 000 %%' %(fileName))
+        sys.stdout.flush()
+
+        for chunk in response.iter_content(chunk_size=1024):
+            if chunk:
+                downloaded += len(chunk)
+                percentage = int(downloaded * 100 / totalLength)
+        
+                sys.stdout.write('\r[+] Downloading %s - %03d %%' %(fileName, percentage))
+                sys.stdout.flush()
+                f.write(chunk)
+
+    sys.stdout.write('\n')
+
+
+def patchApk(apkFile, fridaGadgetFile):
+    if not os.path.isfile(apkFile):
+        sys.stdout.write(bcolors.FAIL + '[-] The specified APK does not exist.\n' + bcolors.ENDC)
+        exit(1)
+
+    if not os.path.isfile(fridaGadgetFile):
+        print fridaGadgetFile
+        sys.stdout.write(bcolors.FAIL + '[-] The specified frida-gadget file does not exist.\n' + bcolors.ENDC)
+        exit(1)
+
+    tmpDir = tempfile.gettempdir()
+    tmpDirPatcher = os.path.join(tmpDir, 'apkpatcher_tmp')
+
+    if os.path.isdir(tmpDirPatcher):
+        shutil.rmtree(tmpDirPatcher)
+    
+    tmpDirApk = os.path.join(tmpDirPatcher, apkFile.replace('.apk', '').replace('.', '_'))
+    os.makedirs(tmpDirPatcher)
+
+    sys.stdout.write('[+] Extracting %s\n' %(apkFile))
+    subprocess.check_output(['apktool', 'd', '-o', tmpDirApk, apkFile, '-f'])
+    
+    permissions = subprocess.check_output(['aapt', 'dump', 'permissions', apkFile])
+
+    if 'android.permission.INTERNET' not in permissions:
+        patchManifest(tmpDirApk)
+
+    dumpLines = subprocess.check_output(['aapt', 'dump', 'badging', apkFile]).split('\n')
+
+    entryPoint = None
+
+    for line in dumpLines:
+        if 'launchable-activity:' in line:
+            nameStart = line.find('name=')
+            entryPoint = line[nameStart:].split(' ')[0].replace('name=', '').replace('\'', '').replace('"', '')
+            break
+
+    if entryPoint is None:
+        sys.stdout.write('[-] Something was wrong while getting launchable-activity\n')
+        exit(1)
+
+    sys.stdout.write('[*] Entrypoint is %s\n' %(entryPoint))
+    
+    entryPointPath = os.path.join(tmpDirApk, 'smali', entryPoint.replace('.', '/') + '.smali')
+    
+    if not os.path.isfile(entryPointPath):
+        sys.stdout.write('[-] Entrypoint file not found.\n')
+        exit(1)
+
+    patchEntryPoint(entryPointPath)
+    insertGadgetLib(tmpDirApk, fridaGadgetFile)
+
+    newFileName, targetFile = repackageApk(tmpDirApk, apkFile)
+    signAndZipAlignApk(targetFile)
+    
+    print bcolors.OKBLUE + '[*] Done!' + bcolors.ENDC
+    print bcolors.OKBLUE + '[*] Your patched file is %s' %(targetFile) + bcolors.ENDC
+
+
+def signAndZipAlignApk(targetFile):
+    # Generatey a key
+    
+    sys.stdout.write('[*] Generating a random key...\n')
+    subprocess.call('keytool -genkey -keyalg RSA -keysize 2048 -validity 700 -noprompt -alias apkpatcheralias1 -dname "CN=apk.patcher.com, OU=ID, O=APK, L=Patcher, S=Patch, C=BR" -keystore apkpatcherkeystore -storepass password -keypass password', shell=True)
+
+    sys.stdout.write('[*] Signing the patched apk...\n')
+    subprocess.call('jarsigner -sigalg SHA1withRSA -digestalg SHA1 -keystore apkpatcherkeystore -storepass password %s apkpatcheralias1 >/dev/null 2>&1' %(targetFile), shell=True)
+    os.remove('apkpatcherkeystore')
+
+    sys.stdout.write('[*] The apk was signed.\n')
+    sys.stdout.write('[*] Optimizing apk (zipalign)...')
+    
+    tmpTargetFile = targetFile.replace('.apk', '_tmp.apk')
+    shutil.move(targetFile, tmpTargetFile)
+
+    subprocess.call('zipalign 4 %s %s' %(tmpTargetFile, targetFile), stderr=subprocess.STDOUT, shell=True)
+    os.remove(tmpTargetFile)
+
+    sys.stdout.write('[*] The file was optimized.\n')
+
+def repackageApk(tmpDirApk, apkFile):
+    workingDirectory = os.getcwd()
+    newFileName = apkFile.replace('.apk', '_patched.apk')
+    
+    targetFile = os.path.join(workingDirectory, newFileName)
+
+    if os.path.isfile(targetFile): # ORLY?
+        safeName = str(time.time()).replace('.', '')
+        newFileName = apkFile.replace('.apk', '_%s_patched.apk' %(safeName))
+
+        targetFile = os.path.join(workingDirectory, newFileName)
+
+
+    sys.stdout.write('[*] Repackaging your apk. This can take some time...\n')
+    subprocess.check_output(['apktool', 'b', '-o', targetFile, tmpDirApk])
+
+    return (newFileName, targetFile)
+
+def patchEntryPoint(entryPointPath):
+    fridaGadgetString = '''
+    const-string v0, "frida-gadget"
+
+    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V
+
+'''
+
+    fullGadgetMethod = '''
+.method static constructor <clinit>()V
+    .locals 1
+
+    .prologue
+    const-string v0, "frida-gadget"
+
+    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V
+
+    return-void
+.end method
+'''
+
+    f = open(entryPointPath, 'r')
+    content = f.read()
+    f.close()
+
+    if 'frida-gadget' in content:
+        sys.stdout.write('[*] The frida-gadget is already in the entrypoint.\n')
+        return
+
+    directMethodsStartIndex = content.find('# direct methods')
+    directMethodsEndIndex = content.find('# virtual methods')
+
+    if directMethodsStartIndex is -1 or directMethodsEndIndex is -1:
+        sys.stdout.write('[-] Could not find direct methods.\n')
+        exit(1)
+
+    classConstructorStartIndex = content.find('.method static constructor <clinit>()V',
+            directMethodsStartIndex, directMethodsEndIndex)
+
+    if classConstructorStartIndex is -1:
+        hasClassConstructor = False
+    else:
+        hasClassConstructor = True
+
+    if hasClassConstructor:
+        classConstructorEndIndex = content.find('.end method',
+            classConstructorStartIndex, directMethodsEndIndex)
+
+    if hasClassConstructor and classConstructorEndIndex is -1:
+        sys.stdout.write('[-] Could not find the end of class constructor.\n')
+        exit(1)
+
+    if hasClassConstructor:
+        prologueStartIndex = content.find('.prologue',
+                classConstructorStartIndex, classConstructorEndIndex)
+
+    if hasClassConstructor and prologueStartIndex is -1:
+        sys.stdout.write('[-] Could not find the .prologue of class constructor.\n')
+        exit(1)
+
+    if hasClassConstructor and prologueStartIndex > -1:
+        prologueEndIndex = prologueStartIndex + len('.prologue') + 1
+
+
+    if hasClassConstructor:
+        newContent = content[0:prologueEndIndex]
+        newContent += fridaGadgetString
+        newContent += content[prologueEndIndex:]
+    else:
+        tmpIndex = directMethodsStartIndex + len('# direct methods') + 1
+        newContent = content[0:tmpIndex]
+        newContent += fullGadgetMethod
+        newContent += content[tmpIndex:]
+
+
+    # The newContent is ready to be saved
+
+    f = open(entryPointPath, 'w')
+    f.write(newContent)
+    f.close()
+
+    sys.stdout.write('[+] The entrypoint was patched!\n')
+
+def deleteExistingGadget(gadgetFolderPath):
+    listFiles = os.listdir(gadgetFolderPath)
+
+    if 'libfrida-gadget.so' in listFiles:
+        sys.stdout.write('[!] I found an existing libfrida-gadget.so here.\n')
+        sys.stdout.write('[!] I will delete it and put an updated version of gadget.\n')
+
+        fileToDelete = os.path.join(gadgetFolderPath, 'libfrida-gadget.so')
+        os.remove(filetoDelete)
+
+def insertGadgetLib(tmpDirApk, fridaGadgetFile):
+    libsPath = os.path.join(tmpDirApk, 'lib/')
+
+    if not os.path.isdir(libsPath):
+        sys.stdout.write('[+] Creating libs folder.\n')
+        os.makedirs(libsPath)
+
+    if 'arm' in fridaGadgetFile and not '64' in fridaGadgetFile:
+        targetLibPath1 = os.path.join(libsPath, 'armeabi')
+        targetLibPath2 = os.path.join(libsPath, 'armeabi-v7a')
+
+        if not os.path.isdir(targetLibPath1):
+            sys.stdout.write('[+] Creating armeabi folder.\n')
+            os.makedirs(targetLibPath1)
+
+        deleteExistingGadget(targetLibPath1)
+
+        if not os.path.isdir(targetLibPath2):
+            sys.stdout.write('[+] Creating armeabi-v7a folder.\n')
+            os.makedirs(targetLibPath2)
+
+        deleteExistingGadget(targetLibPath2)
+
+        targetFilePath1 = os.path.join(targetLibPath1, 'libfrida-gadget.so')
+        targetFilePath2 = os.path.join(targetLibPath2, 'libfrida-gadget.so')
+
+        sys.stdout.write('[+] Copying frida-gadget to libs folder.\n')
+        shutil.copyfile(fridaGadgetFile, targetFilePath1)
+        shutil.copyfile(fridaGadgetFile, targetFilePath2)
+
+    elif 'arm64' in fridaGadgetFile:
+        targetLibPath = os.path.join(libsPath, 'arm64-v8a')
+
+        if not os.path.isdir(targetLibPath):
+            sys.stdout.write('[+] Creating arm64-v8a folder.\n')
+            os.makedirs(targetLibPath)
+
+        deleteExistingGadget(targetLibPath)
+
+        targetFilePath = os.path.join(targetLibPath, 'libfrida-gadget.so')
+
+        sys.stdout.write('[+] Copying frida-gadget to libs folder.\n')
+        shutil.copyfile(fridaGadgetFile, targetFilePath)
+
+    elif 'i386' in fridaGadgetFile:
+        targetLibPath = os.path.join(libsPath, 'x86')
+
+        if not os.path.isdir(targetLibPath):
+            sys.stdout.write('[+] Creating x86 folder.\n')
+            os.makedirs(targetLibPath)
+
+        deleteExistingGadget(targetLibPath)
+
+        targetFilePath = os.path.join(targetLibPath, 'libfrida-gadget.so')
+
+        sys.stdout.write('[+] Copying frida-gadget to libs folder.\n')
+        shutil.copyfile(fridaGadgetFile, targetFilePath)
+
+    elif 'x86_64' in gadgetFile:
+        targetLibPath = os.path.join(libsPath, 'x86_64')
+
+        if not os.path.isdir(targetLibPath):
+            sys.stdout.write('[+] Creating x86_64 folder.\n')
+            os.makedirs(targetLibPath)
+
+        deleteExistingGadget(targetLibPath)
+
+        targetFilePath = os.path.join(targetLibPath, 'libfrida-gadget.so')
+
+        sys.stdout.write('[+] Copying frida-gadget to libs folder.\n')
+        shutil.copyfile(fridaGadgetFile, targetFilePath)
+
+    else:
+        sys.stdout.write('[-] Could not identify the right folder to put the gadget.\n')
+        sys.stdout.write('[-] Please rename your frida-gadget file with architecture information.\n')
+        exit(1)
+
+    sys.stdout.write('[*] The gadget file was inserted.\n')
+
+
+def patchManifest(tmpDirApk):
+    sys.stdout.write('[+] Patching AndroidManifest.xml...\n')
+
+    internetPermissionTag = '<uses-permission android:name="android.permission.INTERNET"/>'
+    manifestPath = os.path.join(tmpDirApk, 'AndroidManifest.xml')
+    f = open(manifestPath, 'r')
+    manifest = f.read()
+    f.close()
+
+    startManifestTag = manifest.find('<manifest ')
+
+    if startManifestTag is -1:
+        sys.stdout.write('[-] Something is wrong with AndroidManifest.xml\n')
+        exit(1)
+
+    endManifestTag = manifest.find('>', startManifestTag)
+
+    if endManifestTag is -1:
+        sys.stdout.write('[-] Something is wrong with AndroidManifest.xml\n')
+        exit(1)
+
+    newManifest = manifest[:endManifestTag+1] + '\n'
+    newManifest += '    '  # indent
+    newManifest += internetPermissionTag
+    newManifest += manifest[endManifestTag+1:]
+    
+    f = open(manifestPath, 'w')
+    f.write(newManifest)
+    f.closed()
+
+def getRecommendedGadget():
+    ret = None
+
+    sys.stdout.write('[*] Trying to identify the right frida-gadget...\n')
+    abi = subprocess.check_output(['adb', 'shell', 'getprop ro.product.cpu.abi']).strip()
+ 
+    fridaVersion = subprocess.check_output(['frida', '--version']).strip()
+    currentFolder = os.path.dirname(os.path.abspath(__file__))                                                                             
+    gadgetsFolder = os.path.join(currentFolder, 'gadgets')
+    targetFolder = os.path.join(gadgetsFolder, fridaVersion)
+    
+    if os.path.isdir(targetFolder):
+        dirList = os.listdir(targetFolder)
+        gadgetFiles = [f for f in dirList if os.path.isfile(os.path.join(targetFolder, f))]
+    else:
+        sys.stdout.write('[-] Gadget folder not found. Try "python %s --update"\n' %(sys.argv[0]))
+        return ret
+
+    if abi in ['armeabi', 'armeabi-v7a']:
+        for gadgetFile in gadgetFiles:
+            if 'arm' in gadgetFile and not '64' in gadgetFile:
+                fullPath = os.path.join(targetFolder, gadgetFile)
+                ret = fullPath
+                break
+
+    elif abi is 'arm64-v8a' or 'arm64' in abi:
+        for gadgetFile in gadgetFiles:
+            if 'arm64' in gadgetFile:
+                fullPath = os.path.join(targetFolder, gadgetFile)
+                ret = fullPath
+                break
+
+    elif abi is 'x86':
+        for gadgetFile in gadgetFiles:
+            if 'i386' in gadgetFile:
+                fullPath = os.path.join(targetFolder, gadgetFile)
+                ret = fullPath
+                break
+
+    elif abi is 'x86_64':
+        for gadgetFile in gadgetFiles:
+            if 'x86_64' in gadgetFile:
+                fullPath = os.path.join(targetFolder, gadgetFile)
+                ret = fullPath
+                break
+    
+    if ret is None:
+        sys.stdout.write('[-] No recommended gadget file was found.\n')
+    else:
+        sys.stdout.write('[*] Architecture identified. Gadget was selected.\n')
+
+    return ret
+
+def main():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('-a', '--apk', help='Specify the apk you want to patch')
+    #parser.add_argument('-l', '--list', help='List the available frida-gadgets')
+    parser.add_argument('-g', '--gadget', help='Specify the frida-gadget file')
+    parser.add_argument('--update', help='Update frida-gadgets', action='store_true')
+
+    args = parser.parse_args()
+
+    if len(sys.argv) == 1:
+        parser.print_help()
+    
+    if args.update:
+        updateFridaGadgets()
+
+    if args.apk:
+        if not hasSatisfiedDependencies():
+            exit(1)
+
+        if args.gadget:
+            fridaGadgetFile = args.gadget
+        else:
+            fridaGadgetFile = getRecommendedGadget()
+
+            if fridaGadgetFile is None:
+                sys.stdout.write(bcolors.FAIL + '[-] Could not identify the right frida-gadget file.\n' + bcolors.ENDC)
+                sys.stdout.write(bcolors.FAIL + '[!] Is your smartphone connected?\n' + bcolors.ENDC)
+                exit(1)
+
+        patchApk(args.apk, fridaGadgetFile)
+if __name__ == '__main__':
+    try:
+        main()
+    except KeyboardInterrupt:
+        print bcolors.FAIL + '[-] CTRL+C was pressed. Exiting...' + bcolors.ENDC
+        exit(1)
