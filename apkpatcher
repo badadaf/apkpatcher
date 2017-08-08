@@ -1,4 +1,4 @@
-#!/bin/env python2.7
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 import sys
@@ -449,7 +449,7 @@ def patchManifest(tmpDirApk):
     
     f = open(manifestPath, 'w')
     f.write(newManifest)
-    f.closed()
+    f.close()
 
 def getRecommendedGadget():
     ret = None
