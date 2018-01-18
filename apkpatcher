@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/python2.7
 # -*- coding: utf-8 -*-
 
 import sys
@@ -150,16 +150,24 @@ def download(url, targetPath):
     sys.stdout.write('\n')
 
 
-def patchApk(apkFile, fridaGadgetFile):
+def patchApk(apkFile, fridaGadgetFile, configFile, autoloadScript):
     if not os.path.isfile(apkFile):
         sys.stdout.write(bcolors.FAIL + '[-] The specified APK does not exist.\n' + bcolors.ENDC)
         exit(1)
-
+        
     if not os.path.isfile(fridaGadgetFile):
         print fridaGadgetFile
         sys.stdout.write(bcolors.FAIL + '[-] The specified frida-gadget file does not exist.\n' + bcolors.ENDC)
         exit(1)
 
+    if configFile and not os.path.isfile(configFile):
+        sys.stdout.write(bcolors.FAIL + '[-] The specified config file does not exist.\n' + bcolors.ENDC)
+        exit(1)
+
+    if autoloadScript and not os.path.isfile(autoloadScript):
+        sys.stdout.write(bcolors.FAIL + '[-] The specified autoload hook file does not exist.\n' + bcolors.ENDC)
+        exit(1)
+        
     tmpDir = tempfile.gettempdir()
     tmpDirPatcher = os.path.join(tmpDir, 'apkpatcher_tmp')
 
@@ -200,7 +208,7 @@ def patchApk(apkFile, fridaGadgetFile):
         exit(1)
 
     patchEntryPoint(entryPointPath)
-    insertGadgetLib(tmpDirApk, fridaGadgetFile)
+    insertGadgetLib(tmpDirApk, fridaGadgetFile, configFile, autoloadScript)
 
     newFileName, targetFile = repackageApk(tmpDirApk, apkFile)
     signAndZipAlignApk(targetFile)
@@ -341,7 +349,15 @@ def deleteExistingGadget(gadgetFolderPath):
         fileToDelete = os.path.join(gadgetFolderPath, 'libfrida-gadget.so')
         os.remove(filetoDelete)
 
-def insertGadgetLib(tmpDirApk, fridaGadgetFile):
+    if 'libfrida-gadget.config' in listFiles:
+        sys.stdout.write('[!] I found an existing libfrida-gadget.config here.\n')
+        sys.stdout.write('[!] I will delete it and put an updated version of gadget.\n')
+
+        fileToDelete = os.path.join(gadgetFolderPath, 'libfrida-gadget.config')
+        os.remove(filetoDelete)
+        
+
+def insertGadgetLib(tmpDirApk, fridaGadgetFile, configFile, autoloadScript):
     libsPath = os.path.join(tmpDirApk, 'lib/')
 
     if not os.path.isdir(libsPath):
@@ -371,6 +387,17 @@ def insertGadgetLib(tmpDirApk, fridaGadgetFile):
         shutil.copyfile(fridaGadgetFile, targetFilePath1)
         shutil.copyfile(fridaGadgetFile, targetFilePath2)
 
+        if configFile:
+            sys.stdout.write('[+] Copying config file to libs folder.\n')
+            shutil.copyfile(configFile, targetFilePath1.replace('.so', '.config.so'))
+            shutil.copyfile(configFile, targetFilePath2.replace('.so', '.config.so'))
+        
+        if autoloadScript:
+            sys.stdout.write('[+] Copying autoload script to libs folder.\n')
+            shutil.copyfile(autoloadScript, targetFilePath1.replace('libfrida-gadget.so', 'libhook.js.so'))
+            shutil.copyfile(autoloadScript, targetFilePath2.replace('libfrida-gadget.so', 'libhook.js.so'))
+
+            
     elif 'arm64' in fridaGadgetFile:
         targetLibPath = os.path.join(libsPath, 'arm64-v8a')
 
@@ -385,7 +412,16 @@ def insertGadgetLib(tmpDirApk, fridaGadgetFile):
         sys.stdout.write('[+] Copying frida-gadget to libs folder.\n')
         shutil.copyfile(fridaGadgetFile, targetFilePath)
 
-    elif 'i386' in fridaGadgetFile:
+        if configFile:
+            sys.stdout.write('[+] Copying config file to libs folder.\n')
+            shutil.copyfile(configFile, targetFilePath.replace('.so', '.config.so'))
+        
+        if autoloadScript:
+            sys.stdout.write('[+] Copying autoload script to libs folder.\n')
+            shutil.copyfile(autoloadScript, targetFilePath.replace('libfrida-gadget.so', 'libhook.js.so'))
+
+        
+    elif 'i386' in fridaGadgetFile or ('x86' in fridaGadgetFile and not '64' in fridaGadgetFile):
         targetLibPath = os.path.join(libsPath, 'x86')
 
         if not os.path.isdir(targetLibPath):
@@ -399,7 +435,16 @@ def insertGadgetLib(tmpDirApk, fridaGadgetFile):
         sys.stdout.write('[+] Copying frida-gadget to libs folder.\n')
         shutil.copyfile(fridaGadgetFile, targetFilePath)
 
-    elif 'x86_64' in gadgetFile:
+        if configFile:
+            sys.stdout.write('[+] Copying config file to libs folder.\n')
+            shutil.copyfile(configFile, targetFilePath.replace('.so', '.config.so'))
+        
+        if autoloadScript:
+            sys.stdout.write('[+] Copying autoload script to libs folder.\n')
+            shutil.copyfile(autoloadScript, targetFilePath.replace('libfrida-gadget.so', 'libhook.js.so'))
+
+        
+    elif 'x86_64' in fridaGadgetFile:
         targetLibPath = os.path.join(libsPath, 'x86_64')
 
         if not os.path.isdir(targetLibPath):
@@ -413,6 +458,15 @@ def insertGadgetLib(tmpDirApk, fridaGadgetFile):
         sys.stdout.write('[+] Copying frida-gadget to libs folder.\n')
         shutil.copyfile(fridaGadgetFile, targetFilePath)
 
+        if configFile:
+            sys.stdout.write('[+] Copying config file to libs folder.\n')
+            shutil.copyfile(configFile, targetFilePath.replace('.so', '.config.so'))
+        
+        if autoloadScript:
+            sys.stdout.write('[+] Copying autoload script to libs folder.\n')
+            shutil.copyfile(autoloadScript, targetFilePath.replace('libfrida-gadget.so', 'libhook.js.so'))
+        
+        
     else:
         sys.stdout.write('[-] Could not identify the right folder to put the gadget.\n')
         sys.stdout.write('[-] Please rename your frida-gadget file with architecture information.\n')
@@ -456,7 +510,9 @@ def getRecommendedGadget():
 
     sys.stdout.write('[*] Trying to identify the right frida-gadget...\n')
     abi = subprocess.check_output(['adb', 'shell', 'getprop ro.product.cpu.abi']).strip()
- 
+
+    sys.stdout.write('[*] The abi is %s\n' %(abi))
+    
     fridaVersion = subprocess.check_output(['frida', '--version']).strip()
     currentFolder = os.path.dirname(os.path.abspath(__file__))                                                                             
     gadgetsFolder = os.path.join(currentFolder, 'gadgets')
@@ -500,10 +556,127 @@ def getRecommendedGadget():
     if ret is None:
         sys.stdout.write('[-] No recommended gadget file was found.\n')
     else:
-        sys.stdout.write('[*] Architecture identified. Gadget was selected.\n')
+        sys.stdout.write('[*] Architecture identified (%s). Gadget was selected.\n' %(abi))
 
     return ret
 
+def selectInteractionType():
+    print '[*] INTERACTION TYPE'
+    print '1 - Listen'
+    print '2 - Script'
+    # print '3 - ScriptDirectory' ## Not supported yet
+    
+    code = raw_input('\nSelect an interaction type (Default: Listen): ')
+
+    if code not in ['1', '2']:
+        code = '1'
+
+    if code == '1':
+        print '\n[+] Type "listen" was selected...'
+        return 'listen'
+    elif code == '2':
+        print '\n[+] Type "Script" was selected...'
+        return 'script'
+
+def getListenConfigs():
+    address = raw_input('\nAddress to listen (Default: 127.0.0.1): ')
+
+    if address == '':
+        address = '127.0.0.1'
+
+    port = raw_input('\nPort to listen (Default: 27042): ')
+
+    if port == '':
+        port = 27042
+    else:
+        port = int(port)
+
+    on_load = raw_input('\nWhat to do when start app (Default: wait): ')
+
+    if on_load == '':
+        on_load = 'wait'
+
+    return address, port, on_load
+
+def saveConfigFile(configText):
+    filePath = os.path.join(os.getcwd(), 'apkpatcher_config.config')
+    f = open(filePath, 'w')
+
+    f.write(configText)
+    f.close()
+
+    print '[+] The config file was created at %s' %(filePath)
+
+def configWizard():
+    print '+---------------------------------+'
+    print '|          CONFIG WIZARD          |'
+    print '+---------------------------------+\n\n'
+    
+    config = {}
+    interactionType = selectInteractionType()
+
+    if interactionType == 'listen':
+        address, port, on_load = getListenConfigs()
+        
+        config['interaction'] = {
+            'type': interactionType,
+            'address': address,
+            'port': port,
+            'on_load': on_load
+        }
+
+    elif interactionType == 'script':
+        path = raw_input('\nPath of the hook file on the device (Default: ./hook.js): ')
+
+        if path == '':
+            path = './hook.js'
+
+        config['interaction'] = {
+            'type': interactionType,
+            'path': path
+        }
+        
+    configText = str(json.dumps(config))
+
+    saveConfigFile(configText)
+
+def getIntFridaVersion(version):
+    versionSplit = version.split('.')
+
+    if(len(versionSplit) > 3):
+        versionSplit = versionSplit[0:3]
+
+    while(len(versionSplit) < 3):
+        versionSplit.append('0')
+
+    return int(''.join(["{num:03d}".format(num=int(i)) for i in versionSplit]))
+    
+def minFridaVersion(minVersion):
+    fridaVersion = subprocess.check_output(['frida', '--version']).strip()
+
+    if getIntFridaVersion(fridaVersion) < getIntFridaVersion(minVersion):
+        return False
+
+    return True
+    
+def getDefaultConfigFile():
+    config = '''
+{
+    "interaction": {
+        "type": "script",
+        "path": "./libhook.js.so"
+    }
+}
+    '''
+    
+    path = os.path.join(os.getcwd(), 'generatedConfigFile.config')
+    f = open(path, 'w')
+
+    f.write(config)
+    f.close()
+
+    return path
+    
 def main():
     parser = argparse.ArgumentParser()
 
@@ -511,15 +684,46 @@ def main():
     #parser.add_argument('-l', '--list', help='List the available frida-gadgets')
     parser.add_argument('-g', '--gadget', help='Specify the frida-gadget file')
     parser.add_argument('--update', help='Update frida-gadgets', action='store_true')
-
+    parser.add_argument('--config-wizard', help='A wizard to create config files', action='store_true')
+    parser.add_argument('--autoload-script', help='Autoload hook script when start the app')
+    parser.add_argument('--config-file', help='Specify the config file to the gadget')
+    
     args = parser.parse_args()
-
+    
     if len(sys.argv) == 1:
         parser.print_help()
+        return
     
     if args.update:
         updateFridaGadgets()
 
+    if args.config_wizard:
+        configWizard()
+        return
+
+    if not args.apk:
+        parser.print_help()
+        return
+    
+    if args.autoload_script and args.config_file:
+        sys.stdout.write(bcolors.FAIL + '[-] Do not use --autoload-script and --config together.\n' + bcolors.ENDC)
+        exit(1)
+    
+    configFile = ''
+    if args.autoload_script:
+        if not minFridaVersion('10.6.33'):
+            sys.stdout.write(bcolors.FAIL + '[-] Autoload is not supported in this version of frida. Update your frida!\n' + bcolors.ENDC)
+            exit(1)
+            
+        configFile = getDefaultConfigFile()
+
+    if args.config_file:
+        if not minFridaVersion('10.6.33'):
+            sys.stdout.write(bcolors.FAIL + '[-] Config file is not supported in this version of frida. Update your frida!\n' + bcolors.ENDC)
+            exit(1)
+            
+        configFile = os.path.join(os.getcwd(), args.config_file)
+    
     if args.apk:
         if not hasSatisfiedDependencies():
             exit(1)
@@ -534,7 +738,8 @@ def main():
                 sys.stdout.write(bcolors.FAIL + '[!] Is your smartphone connected?\n' + bcolors.ENDC)
                 exit(1)
 
-        patchApk(args.apk, fridaGadgetFile)
+        patchApk(args.apk, fridaGadgetFile, configFile, args.autoload_script)
+            
 if __name__ == '__main__':
     try:
         main()
