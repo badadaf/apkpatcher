@@ -1,6 +1,7 @@
 #!/usr/bin/python2.7
 # -*- coding: utf-8 -*-
 
+import os
 import sys
 import time
 import json
@@ -200,12 +201,22 @@ def patchApk(apkFile, fridaGadgetFile, configFile, autoloadScript):
         exit(1)
 
     sys.stdout.write('[*] Entrypoint is %s\n' %(entryPoint))
+
+    entryPointPath = None
+    listFilesTmpApkDir = os.listdir(tmpDirApk)
+
+    for entry in listFilesTmpApkDir:
+        if entry.startswith('smali'):
+            entryPointPathAux = os.path.join(tmpDirApk, entry, entryPoint.replace('.', '/') + '.smali')
     
-    entryPointPath = os.path.join(tmpDirApk, 'smali', entryPoint.replace('.', '/') + '.smali')
-    
-    if not os.path.isfile(entryPointPath):
-        sys.stdout.write('[-] Entrypoint file not found.\n')
-        exit(1)
+            if os.path.isfile(entryPointPathAux):
+                entryPointPath = entryPointPathAux
+                sys.stdout.write('[*] Found entrypoint at %s\n' %(entryPointPath.replace(tmpDirApk, '')))
+                break
+
+    if entryPointPath is None:
+        sys.stdout.write('[-] Could not find the entrypoint\n')
+        sys.exit(1)
 
     patchEntryPoint(entryPointPath)
     insertGadgetLib(tmpDirApk, fridaGadgetFile, configFile, autoloadScript)
@@ -228,7 +239,7 @@ def signAndZipAlignApk(targetFile):
     os.remove('apkpatcherkeystore')
 
     sys.stdout.write('[*] The apk was signed.\n')
-    sys.stdout.write('[*] Optimizing apk (zipalign)...')
+    sys.stdout.write('[*] Optimizing apk (zipalign)...\n')
     
     tmpTargetFile = targetFile.replace('.apk', '_tmp.apk')
     shutil.move(targetFile, tmpTargetFile)
@@ -509,6 +520,8 @@ def getRecommendedGadget():
     ret = None
 
     sys.stdout.write('[*] Trying to identify the right frida-gadget...\n')
+    sys.stdout.write('[*] Waiting for device...\n')
+    os.system('adb wait-for-device')
     abi = subprocess.check_output(['adb', 'shell', 'getprop ro.product.cpu.abi']).strip()
 
     sys.stdout.write('[*] The abi is %s\n' %(abi))
