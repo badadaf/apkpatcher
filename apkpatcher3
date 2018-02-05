@@ -711,6 +711,26 @@ class Patcher:
         self.print_info('The file was optimized!')
 
     @staticmethod
+    def get_int_frida_version(str_version):
+        version_split = str_version.split('.')
+
+        if len(version_split) > 3:
+            version_split = version_split[0:3]
+
+        while len(version_split) < 3:
+            version_split.append('0')
+
+        return int(''.join(["{num:03d}".format(num=int(i)) for i in version_split]))
+
+    def min_frida_version(self, min_version):
+        frida_version = subprocess.check_output(['frida', '--version']).strip().decode('utf-8')
+
+        if self.get_int_frida_version(frida_version) < self.get_int_frida_version(min_version):
+            return False
+
+        return True
+
+    @staticmethod
     def get_default_config_file():
         config = '''
 {
@@ -829,6 +849,11 @@ def main():
     patcher.insert_frida_loader(entrypoint_smali_path)
 
     if args.autoload_script:
+        if not patcher.min_frida_version('10.6.33'):
+            patcher.print_warn('Autoload is not supported in this version of frida. Update it!')
+
+            return 1
+
         if not os.path.isfile(args.autoload_script):
             patcher.print_warn('The script {0} was not found.'.format(args.autoload_script))
 
