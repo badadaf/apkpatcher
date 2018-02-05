@@ -40,6 +40,12 @@ class ApkParser:
     VERBOSITY_HIGH = 3  # all messages
     VERBOSITY = VERBOSITY_LOW
 
+    ARCH_ARM = 'arm'
+    ARCH_ARM64 = 'arm64'
+    ARCH_X86 = 'x86'
+    ARCH_X64 = 'x64'
+
+
     def __init__(self, apk_file_path=None):
         self.apk_file_path = apk_file_path
 
@@ -326,6 +332,157 @@ class ApkParser:
 
         return final_tmp_dir
 
+    def insert_frida_loader(self, entrypoint_smali_path, frida_lib_name='frida-gadget'):
+        partial_injection_code = '''
+    const-string v0, "<LIBFRIDA>"
+
+    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V
+
+        '''.replace('<LIBFRIDA>', frida_lib_name)
+
+        full_injection_code = '''
+.method static constructor <clinit>()V
+    .locals 1
+
+    .prologue
+    const-string v0, "<LIBFRIDA>"
+
+    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V
+
+    return-void
+.end method
+        '''.replace('<LIBFRIDA>', frida_lib_name)
+
+        with open(entrypoint_smali_path, 'r') as smali_file:
+            content = smali_file.read()
+
+            if 'frida-gadget' in content:
+                self.print_info('The frida-gadget is already in the entrypoint. Skipping...')
+                return False
+
+            direct_methods_start_index = content.find('# direct methods')
+            direct_methods_end_index = content.find('# virtual methods')
+
+            if direct_methods_start_index is -1 or direct_methods_end_index is -1:
+                self.print_warn('Could not find direct methods.')
+                return False
+
+            class_constructor_start_index = content.find('.method static constructor <clinit>()V',
+                                                         direct_methods_start_index, direct_methods_end_index)
+
+            if class_constructor_start_index is -1:
+                has_class_constructor = False
+            else:
+                has_class_constructor = True
+
+            class_constructor_end_index = -1
+            if has_class_constructor:
+                class_constructor_end_index = content.find('.end method',
+                                                           class_constructor_start_index, direct_methods_end_index)
+
+            if has_class_constructor and class_constructor_end_index is -1:
+                self.print_warn('Could not find the end of class constructor.')
+                return False
+
+            prologue_start_index = -1
+            if has_class_constructor:
+                prologue_start_index = content.find('.prologue',
+                                                    class_constructor_start_index, class_constructor_end_index)
+
+            if has_class_constructor and prologue_start_index is -1:
+                self.print_warn('Could not find the .prologue of class constructor.')
+                return False
+
+            prologue_end_index = -1
+            if has_class_constructor and prologue_start_index > -1:
+                prologue_end_index = prologue_start_index + len('.prologue') + 1
+
+            if has_class_constructor:
+                new_content = content[0:prologue_end_index]
+                new_content += partial_injection_code
+                new_content += content[prologue_end_index:]
+            else:
+                tmp_index = direct_methods_start_index + len('# direct methods') + 1
+                new_content = content[0:tmp_index]
+                new_content += full_injection_code
+                new_content += content[tmp_index:]
+
+        # The newContent is ready to be saved
+
+        with open(entrypoint_smali_path, 'w') as smali_file:
+            smali_file.write(new_content)
+
+        self.print_info('Frida loader was injected in the entrypoint smali file!')
+
+        return True
+
+    def get_arch_by_gadget(self, gadget_path):
+        if 'arm' in gadget_path and '64' not in gadget_path:
+            return self.ARCH_ARM
+
+        elif 'arm64' in gadget_path:
+            return self.ARCH_ARM64
+
+        elif 'i386' in gadget_path or ('x86' in gadget_path and '64' not in gadget_path):
+            return self.ARCH_X86
+
+        elif 'x86_64' in gadget_path:
+            return self.ARCH_X64
+
+        else:
+            return None
+
+    def create_lib_arch_folders(self, base_path, arch):
+        sub_dir = None
+        sub_dir_2 = None
+
+        libs_path = os.path.join(base_path, 'lib/')
+
+        if not os.path.isdir(libs_path):
+            self.print_info('There is no "lib" folder. Creating...')
+            os.makedirs(libs_path)
+
+        if arch == self.ARCH_ARM:
+            sub_dir = os.path.join(libs_path, 'armeabi')
+            sub_dir_2 = os.path.join(libs_path, 'armeabi-v7a')
+
+        elif arch == self.ARCH_ARM64:
+            sub_dir = os.path.join(libs_path, 'arm64-v8a')
+
+        elif arch == self.ARCH_X86:
+            sub_dir = os.path.join(libs_path, 'x86')
+
+        elif arch == self.ARCH_X64:
+            sub_dir = os.path.join(libs_path, 'x86_64')
+
+        else:
+            self.print_warn('Couldn\'t create the appropriate folder with the given arch.')
+            return []
+
+        if not os.path.isdir(sub_dir):
+            self.print_info('Creating folder {0}'.format(sub_dir))
+            os.makedirs(sub_dir)
+
+        if arch == self.ARCH_ARM:
+            if not os.path.isdir(sub_dir_2):
+                self.print_info('Creating folder {0}'.format(sub_dir_2))
+                os.makedirs(sub_dir_2)
+
+        if arch == self.ARCH_ARM:
+            return [sub_dir, sub_dir_2]
+
+        else:
+            return [sub_dir]
+
+    def insert_frida_lib(self, base_path, gadget_path, config_file, auto_load_script):
+        arch = self.get_arch_by_gadget(gadget_path)
+        arch_folders = self.create_lib_arch_folders(base_path, arch)
+
+        if not arch_folders:
+            self.print_warn('') # HEY
+
+        for folder in arch_folders:
+            delete_existing_gadget(folder)
 
 if __name__ == '__main__':
     try:
@@ -334,7 +491,7 @@ if __name__ == '__main__':
         parser = ApkParser()
         parser.set_verbosity(3)
 
-        badada_patos = '/tmp/apkpatcher/BadadaPatos.apk'
+        badada_patos = '/home/vinicius/assessments/badadaPatos/BadadaPatos.apk'
         tmp_path = parser.create_temp_folder_for_apk(badada_patos)
 
         print(tmp_path)
@@ -342,7 +499,8 @@ if __name__ == '__main__':
         parser.extract_apk(badada_patos, tmp_path, False)
         entry_class = parser.get_entrypoint_class_name(badada_patos)
         entry_smali = parser.get_entrypoint_smali_path(tmp_path, entry_class)
-        print(entry_smali)
+        result = parser.insert_frida_loader(entry_smali)
+        print("Patched smali: {0}".format(result))
 
     except KeyboardInterrupt:
         exit(1)
