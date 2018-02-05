@@ -273,10 +273,10 @@ class Patcher:
             self.print_info('Extracting {0} (with resources) to {1}'.format(apk_path, destination_path))
             self.print_info('Some errors may occur while decoding resources that have framework dependencies')
 
-            subprocess.check_output(['apktool', 'd', '-o', destination_path, apk_path, '-f'])
+            subprocess.check_output(['apktool', '-f', 'd', '-o', destination_path, apk_path])
         else:
             self.print_info('Extracting {0} (without resources) to {1}'.format(apk_path, destination_path))
-            subprocess.check_output(['apktool', '-r', 'd', '-o', destination_path, apk_path, '-f'])
+            subprocess.check_output(['apktool', '-f', '-r', 'd', '-o', destination_path, apk_path])
 
     def has_permission(self, apk_path, permission_name):
         permissions = subprocess.check_output(['aapt', 'dump', 'permissions', apk_path]).decode('utf-8')
@@ -326,7 +326,7 @@ class Patcher:
 
     def create_temp_folder_for_apk(self, apk_path):
         system_tmp_dir = tempfile.gettempdir()
-        apkpatcher_tmp_dir = os.path.join(system_tmp_dir, 'apkpatcher_tmp')
+        apkpatcher_tmp_dir = os.path.join(system_tmp_dir, 'apkptmp')
 
         apk_name = apk_path.split('/')[-1]
 
@@ -602,7 +602,7 @@ class Patcher:
         with open(manifest_path, 'r') as manifest_file:
             manifest_content = manifest_file.read()
 
-            start_application_tag = manifest_content.find('<application')
+            start_application_tag = manifest_content.find('<application ')
             end_application_tag = manifest_content.find('>', start_application_tag)
 
         new_manifest = manifest_content[:end_application_tag]
@@ -739,7 +739,16 @@ def main():
     parser.add_argument('-e', '--enable-user-certificates', help='Add some configs in apk to accept user certificates',
                         action='store_true')
 
+    parser.add_argument('-w', '--wait-before-repackage', help='Waits for your OK before repackage the apk',
+                        action='store_true')
+
     parser.add_argument('-o', '--output-file', help='Specify the output file (patched)')
+
+    group = parser.add_argument_group('Execute command before repackage')
+    group.add_argument('-x', '--exec-before-repackage', help='Specify a command to execute before repackage')
+
+    group.add_argument('--pass-temp-path', help='Should I pass the apk folder as parameter to your command?',
+                       action='store_true')
 
     args = parser.parse_args()
 
@@ -812,6 +821,32 @@ def main():
     # END --[ INJECTING FRIDA LIB FILE AND SMALI CODE ]--
 
     apk_file_name = apk_file_path.split('/')[-1]
+
+    if args.wait_before_repackage:
+        print('Apkpatcher is waiting for your OK to repackage the apk...')
+        answer = input('Are you ready? (y/N): ')
+
+        while answer.lower() != 'y':
+            answer = input('Are you ready? (y/N): ')
+
+    if args.exec_before_repackage:
+        if args.pass_temp_path:
+            if 'TMP_PATH_HERE' in args.exec_before_repackage:
+                command_to_execute = args.exec_before_repackage.replace('TMP_PATH_HERE', temporary_path)
+
+            else:
+                command_to_execute = '{0} {1}'.format(args.exec_before_repackage, temporary_path)
+        else:
+            command_to_execute = '{0}'.format(args.exec_before_repackage)
+
+        print('Your command is:')
+        print(command_to_execute)
+
+        answer = input('Are you sure you want to execute it? (y/N) ')
+
+        if answer.lower() == 'y':
+            patcher.print_info('Executing -> {0}'.format(command_to_execute))
+            os.system(command_to_execute)
 
     if args.output_file:
         output_file_path = patcher.repackage_apk(temporary_path, apk_file_name, target_file=args.output_file)
