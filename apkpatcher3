@@ -763,12 +763,13 @@ def main():
     parser.add_argument('-a', '--apk', help='Specify the apk you want to patch')
     parser.add_argument('-g', '--gadget', help='Specify the frida-gadget file')
     parser.add_argument('--autoload-script', help='Auto load script')
-    parser.add_argument('-v', '--verbosity', help='Verbosity level (1 to 3). Default is 3')
+    parser.add_argument('-v', '--verbosity', help='Verbosity level (0 to 3). Default is 3')
     parser.add_argument('--update', help='Update frida-gadgets', action='store_true')
     parser.add_argument('-f', '--force-resources', help='Force extract resources and manifest', action='store_true')
     parser.add_argument('-e', '--enable-user-certificates', help='Add some configs in apk to accept user certificates',
                         action='store_true')
 
+    parser.add_argument('--prevent-frida-gadget', help='Does not insert frida gadget', action='store_true')
     parser.add_argument('-w', '--wait-before-repackage', help='Waits for your OK before repackage the apk',
                         action='store_true')
 
@@ -813,59 +814,68 @@ def main():
 
         return 1
 
-    if args.gadget:
-        gadget_to_use = args.gadget
+    gadget_to_use = None
+    if not args.prevent_frida_gadget:
+        if args.gadget:
+            gadget_to_use = args.gadget
 
-    else:
-        gadget_to_use = patcher.get_recommended_gadget()
+        else:
+            gadget_to_use = patcher.get_recommended_gadget()
 
-    if gadget_to_use is None or not os.path.isfile(gadget_to_use):
-        patcher.print_warn('Could not identify the gadget!')
+        if gadget_to_use is None or not os.path.isfile(gadget_to_use):
+            patcher.print_warn('Could not identify the gadget!')
 
-        return 1
+            return 1
 
     # THE APK PATCHING STARTS HERE
 
     apk_file_path = args.apk
     temporary_path = patcher.create_temp_folder_for_apk(apk_file_path)
-    has_internet_permission = patcher.has_permission(apk_file_path, patcher.INTERNET_PERMISSION)
+
+    has_internet_permission = False
+    if not args.prevent_frida_gadget:
+        has_internet_permission = patcher.has_permission(apk_file_path, patcher.INTERNET_PERMISSION)
 
     # Will extract the resources when needed or when forced
-    if not has_internet_permission or args.enable_user_certificates or args.force_resources:
+    if (not args.prevent_frida_gadget and not has_internet_permission) \
+            or args.enable_user_certificates or args.force_resources:
+
         patcher.extract_apk(apk_file_path, temporary_path, extract_resources=True)
+
     else:
         patcher.extract_apk(apk_file_path, temporary_path, extract_resources=False)
 
-    if not has_internet_permission:
+    if not args.prevent_frida_gadget and not has_internet_permission:
         patcher.inject_permission_manifest(temporary_path, patcher.INTERNET_PERMISSION)
 
     if args.enable_user_certificates:
         patcher.enable_user_certificates(temporary_path)
 
-    # START --[ INJECTING FRIDA LIB FILE AND SMALI CODE ]--
-    entrypoint_class = patcher.get_entrypoint_class_name(apk_file_path)
-    entrypoint_smali_path = patcher.get_entrypoint_smali_path(temporary_path, entrypoint_class)
+    if not args.prevent_frida_gadget:
+        # START --[ INJECTING FRIDA LIB FILE AND SMALI CODE ]--
+        entrypoint_class = patcher.get_entrypoint_class_name(apk_file_path)
+        entrypoint_smali_path = patcher.get_entrypoint_smali_path(temporary_path, entrypoint_class)
 
-    patcher.insert_frida_loader(entrypoint_smali_path)
+        patcher.insert_frida_loader(entrypoint_smali_path)
 
-    if args.autoload_script:
-        if not patcher.min_frida_version('10.6.33'):
-            patcher.print_warn('Autoload is not supported in this version of frida. Update it!')
+        if args.autoload_script:
+            if not patcher.min_frida_version('10.6.33'):
+                patcher.print_warn('Autoload is not supported in this version of frida. Update it!')
 
-            return 1
+                return 1
 
-        if not os.path.isfile(args.autoload_script):
-            patcher.print_warn('The script {0} was not found.'.format(args.autoload_script))
+            if not os.path.isfile(args.autoload_script):
+                patcher.print_warn('The script {0} was not found.'.format(args.autoload_script))
 
-            return 1
+                return 1
 
-        default_config_file = patcher.get_default_config_file()
-        patcher.insert_frida_lib(temporary_path, gadget_to_use,
-                                 config_file_path=default_config_file, auto_load_script_path=args.autoload_script)
+            default_config_file = patcher.get_default_config_file()
+            patcher.insert_frida_lib(temporary_path, gadget_to_use,
+                                     config_file_path=default_config_file, auto_load_script_path=args.autoload_script)
 
-    else:
-        patcher.insert_frida_lib(temporary_path, gadget_to_use)
-    # END --[ INJECTING FRIDA LIB FILE AND SMALI CODE ]--
+        else:
+            patcher.insert_frida_lib(temporary_path, gadget_to_use)
+        # END --[ INJECTING FRIDA LIB FILE AND SMALI CODE ]--
 
     apk_file_name = apk_file_path.split('/')[-1]
 
