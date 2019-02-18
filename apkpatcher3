@@ -397,18 +397,42 @@ class Patcher:
                 prologue_start_index = content.find('.prologue',
                                                     class_constructor_start_index, class_constructor_end_index)
 
+            no_prologue_case = False
+            locals_start_index = -1
             if has_class_constructor and prologue_start_index is -1:
-                self.print_warn('Could not find the .prologue of class constructor.')
+                no_prologue_case = True
+
+                locals_start_index = content.find('.locals ', 
+                    class_constructor_start_index, class_constructor_end_index)
+
+            if no_prologue_case and locals_start_index is -1:
+                self.print_warn('Has class constructor. No prologue case, but no "locals 0" found.')
                 return False
+
+            locals_end_index = -1
+            if no_prologue_case:
+                locals_end_index = locals_start_index + len('locals X')
 
             prologue_end_index = -1
             if has_class_constructor and prologue_start_index > -1:
                 prologue_end_index = prologue_start_index + len('.prologue') + 1
 
             if has_class_constructor:
-                new_content = content[0:prologue_end_index]
-                new_content += partial_injection_code
-                new_content += content[prologue_end_index:]
+                if no_prologue_case:
+                    new_content = content[0:locals_end_index]
+
+                    if content[locals_end_index] == '0':
+                        new_content += '1'
+                    else:
+                        new_content += content[locals_end_index]
+
+                    new_content += '\n\n    .prologue'
+                    new_content += partial_injection_code
+                    new_content += content[locals_end_index+1:]
+                else:
+                    new_content = content[0:prologue_end_index]
+                    new_content += partial_injection_code
+                    new_content += content[prologue_end_index:]
             else:
                 tmp_index = direct_methods_start_index + len('# direct methods') + 1
                 new_content = content[0:tmp_index]
@@ -416,7 +440,7 @@ class Patcher:
                 new_content += content[tmp_index:]
 
         # The newContent is ready to be saved
-
+        
         with open(entrypoint_smali_path, 'w') as smali_file:
             smali_file.write(new_content)
 
