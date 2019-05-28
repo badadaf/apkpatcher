@@ -124,9 +124,8 @@ class Patcher:
             self.print_warn('One or more dependencies are missing!')
             return False
 
-        self.print_info('Updating frida gadgets')
         frida_version = subprocess.check_output(['frida', '--version']).decode('utf-8').strip()
-        self.print_info('Frida version: {0}'.format(frida_version))
+        self.print_info('Updating frida gadgets according to your frida version: {0}'.format(frida_version))
 
         github_link = 'https://api.github.com/repos/frida/frida/releases'
 
