@@ -122,7 +122,12 @@ class Patcher:
         # Check keytool
         if action in ['all']:
             try:
-                subprocess.check_output(['keytool', '-h'], stderr=subprocess.STDOUT)
+                cmd_output = subprocess.check_output(['keytool;echo'], stderr=subprocess.STDOUT, shell=True)
+
+                if b'Key and Certificate' not in cmd_output:
+                    flag = False
+                    self.print_warn('keytool is not installed')
+
             except Exception:
                 flag = False
                 self.print_warn('keytool is not installed')
