@@ -1,19 +1,21 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 
-import sys
+
 import os
+import sys
 import json
 import time
 import signal
 import shutil
+import os.path
 import argparse
 import requests
 import tempfile
-import os.path
 import subprocess
 
 
+# noinspection SpellCheckingInspection
 class BColors:
     COLOR_BLUE = '\033[94m'
     COLOR_RED_BG = '\033[101m'
@@ -32,6 +34,7 @@ class BColors:
     UNDERLINE = '\033[4m'
 
 
+# noinspection PyBroadException,SpellCheckingInspection
 class Patcher:
     apk_file_path = None
     apk_tmp_dir = None
@@ -92,6 +95,14 @@ class Patcher:
                 flag = False
                 self.print_warn('aapt is not installed')
 
+        # Check adb
+        if action in ['all']:
+            try:
+                subprocess.check_output(['adb', '--version'])
+            except Exception:
+                flag = False
+                self.print_warn('adb is not installed')
+
         # Check apktool
         if action in ['all']:
             try:
@@ -107,6 +118,22 @@ class Patcher:
             except Exception:
                 flag = False
                 self.print_warn('unxz is not installed')
+
+        # Check keytool
+        if action in ['all']:
+            try:
+                subprocess.check_output(['keytool', '-h'], stderr=subprocess.STDOUT)
+            except Exception:
+                flag = False
+                self.print_warn('keytool is not installed')
+
+        # Check jarsigner
+        if action in ['all']:
+            try:
+                subprocess.check_output(['jarsigner', '-h'], stderr=subprocess.STDOUT)
+            except Exception:
+                flag = False
+                self.print_warn('jarsigner is not installed')
 
         # Check Zipalign
         if action in ['all']:
@@ -229,7 +256,7 @@ class Patcher:
             dir_list = os.listdir(target_folder)
             gadget_files = [f for f in dir_list if os.path.isfile(os.path.join(target_folder, f))]
         else:
-            self.print_warn('Gadget folder not found. Try "python {0} --update"'.format(sys.argv[0]))
+            self.print_warn('Gadget folder not found. Try "python {0} --update-gadgets"'.format(sys.argv[0]))
             return ret
 
         if abi in ['armeabi', 'armeabi-v7a']:
@@ -401,8 +428,8 @@ class Patcher:
             if has_class_constructor and prologue_start_index is -1:
                 no_prologue_case = True
 
-                locals_start_index = content.find('.locals ', 
-                    class_constructor_start_index, class_constructor_end_index)
+                locals_start_index = content.find('.locals ',
+                                                  class_constructor_start_index, class_constructor_end_index)
 
             if no_prologue_case and locals_start_index is -1:
                 self.print_warn('Has class constructor. No prologue case, but no "locals 0" found.')
@@ -464,6 +491,7 @@ class Patcher:
             return None
 
     def create_lib_arch_folders(self, base_path, arch):
+        # noinspection PyUnusedLocal
         sub_dir = None
         sub_dir_2 = None
 
@@ -602,6 +630,10 @@ class Patcher:
         if os.path.isfile(netsec_path):
             self.print_warn('The network_security_config.xml file already exists!')
             self.print_warn('I will try to delete it and create a new one. This can introduce some bug!')
+
+            with open(netsec_path, 'r') as netsec_file:
+                contents = netsec_file.read()
+                self.print_warn('Original network_security_config.xml file content:\n{0}'.format(contents))
 
             os.remove(netsec_path)
 
@@ -759,10 +791,12 @@ class Patcher:
 {
     "interaction": {
         "type": "script",
+        "address": "127.0.0.1",
+        "port": 27042,
         "path": "./libhook.js.so"
     }
 }
-            '''
+        '''
 
         path = os.path.join(os.getcwd(), 'generatedConfigFile.config')
         f = open(path, 'w')
@@ -779,6 +813,7 @@ def signal_handler(_signal_id, _frame):
     sys.exit(1)
 
 
+# noinspection SpellCheckingInspection
 def main():
     patcher = Patcher()
 
@@ -787,8 +822,10 @@ def main():
     parser.add_argument('-g', '--gadget', help='Specify the frida-gadget file')
     parser.add_argument('--autoload-script', help='Auto load script')
     parser.add_argument('-v', '--verbosity', help='Verbosity level (0 to 3). Default is 3')
-    parser.add_argument('--update', help='Update frida-gadgets', action='store_true')
-    parser.add_argument('-f', '--force-resources', help='Force extract resources and manifest', action='store_true')
+    parser.add_argument('--update-gadgets', help='Update frida-gadgets', action='store_true')
+    parser.add_argument('-f', '--force-extract-resources', help='Force extract resources and manifest',
+                        action='store_true')
+
     parser.add_argument('-e', '--enable-user-certificates', help='Add some configs in apk to accept user certificates',
                         action='store_true')
 
@@ -816,7 +853,7 @@ def main():
     else:
         patcher.set_verbosity(patcher.VERBOSITY_HIGH)
 
-    if args.update:
+    if args.update_gadgets:
         patcher.update_apkpatcher_gadgets()
 
         return 0
@@ -861,7 +898,7 @@ def main():
 
     # Will extract the resources when needed or when forced
     if (not args.prevent_frida_gadget and not has_internet_permission) \
-            or args.enable_user_certificates or args.force_resources:
+            or args.enable_user_certificates or args.force_extract_resources:
 
         patcher.extract_apk(apk_file_path, temporary_path, extract_resources=True)
 
@@ -887,14 +924,16 @@ def main():
 
                 return 1
 
-            if not os.path.isfile(args.autoload_script):
-                patcher.print_warn('The script {0} was not found.'.format(args.autoload_script))
+            script_file = args.autoload_script
+
+            if not os.path.isfile(script_file):
+                patcher.print_warn('The script {0} was not found.'.format(script_file))
 
                 return 1
 
             default_config_file = patcher.get_default_config_file()
             patcher.insert_frida_lib(temporary_path, gadget_to_use,
-                                     config_file_path=default_config_file, auto_load_script_path=args.autoload_script)
+                                     config_file_path=default_config_file, auto_load_script_path=script_file)
 
         else:
             patcher.insert_frida_lib(temporary_path, gadget_to_use)
@@ -903,11 +942,12 @@ def main():
     apk_file_name = apk_file_path.split('/')[-1]
 
     if args.wait_before_repackage:
-        print('Apkpatcher is waiting for your OK to repackage the apk...')
-        answer = input('Are you ready? (y/N): ')
+        patcher.print_info('Apkpatcher is waiting for your OK to repackage the apk...')
+
+        answer = input(BColors.COLOR_BLUE + '[*] Are you ready? (y/N): ' + BColors.ENDC)
 
         while answer.lower() != 'y':
-            answer = input('Are you ready? (y/N): ')
+            answer = input(BColors.COLOR_BLUE + '[*] Are you ready? (y/N): ' + BColors.ENDC)
 
     if args.exec_before_repackage:
         if args.pass_temp_path:
@@ -919,10 +959,8 @@ def main():
         else:
             command_to_execute = '{0}'.format(args.exec_before_repackage)
 
-        print('Your command is:')
-        print(command_to_execute)
-
-        answer = input('Are you sure you want to execute it? (y/N) ')
+        print(BColors.COLOR_RED + '[!] Provided shell command: {0}'.format(command_to_execute) + BColors.COLOR_ENDC)
+        answer = input(BColors.COLOR_RED + '[!] Are you sure you want to execute it? (y/N) ' + BColors.ENDC)
 
         if answer.lower() == 'y':
             patcher.print_info('Executing -> {0}'.format(command_to_execute))
@@ -940,6 +978,7 @@ def main():
     patcher.print_done('Your file is located at {0}.'.format(output_file_path))
 
     return 0
+
 
 if __name__ == '__main__':
     signal.signal(signal.SIGINT, signal_handler)
