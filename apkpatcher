@@ -743,12 +743,13 @@ class Patcher:
         f.close()
 
     def sign_and_zipalign(self, apk_path):
-        self.print_info('Generating a random key...')
-        subprocess.call(
-            'keytool -genkey -keyalg RSA -keysize 2048 -validity 700 -noprompt -alias apkpatcheralias1 -dname '
-            '"CN=apk.patcher.com, OU=ID, O=APK, L=Patcher, S=Patch, C=BR" -keystore apkpatcherkeystore '
-            '-storepass password -keypass password 2> /dev/null',
-            shell=True)
+        if not os.path.isfile("apkpatcherkeystore"):
+            self.print_info('Generating a random key...')
+            subprocess.call(
+                'keytool -genkey -keyalg RSA -keysize 2048 -validity 700 -noprompt -alias apkpatcheralias1 -dname '
+                '"CN=apk.patcher.com, OU=ID, O=APK, L=Patcher, S=Patch, C=BR" -keystore apkpatcherkeystore '
+                '-storepass password -keypass password 2> /dev/null',
+                shell=True)
 
         self.print_info('Signing the patched apk...')
         subprocess.call(
@@ -756,7 +757,8 @@ class Patcher:
             '-storepass password {0} apkpatcheralias1 >/dev/null 2>&1'.format(apk_path),
             shell=True)
 
-        os.remove('apkpatcherkeystore')
+        if not args.keep_keystore:
+            os.remove('apkpatcherkeystore')
 
         self.print_info('The apk was signed!')
         self.print_info('Optimizing with zipalign...')
@@ -836,6 +838,8 @@ def main():
 
     parser.add_argument('--prevent-frida-gadget', help='Does not insert frida gadget', action='store_true')
     parser.add_argument('-w', '--wait-before-repackage', help='Waits for your OK before repackage the apk',
+                        action='store_true')
+    parser.add_argument('-k', '--keep-keystore', help='Keeps generated keystore for future use',
                         action='store_true')
 
     parser.add_argument('-o', '--output-file', help='Specify the output file (patched)')
