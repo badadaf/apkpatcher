@@ -597,7 +597,7 @@ class Patcher:
 
         return True
 
-    def repackage_apk(self, base_apk_path, apk_name, target_file=None):
+    def repackage_apk(self, base_apk_path, apk_name, target_file=None, use_aapt2=False):
         if target_file is None:
             current_path = os.getcwd()
             target_file = os.path.join(current_path, apk_name.replace('.apk', '_patched.apk'))
@@ -610,7 +610,11 @@ class Patcher:
         self.print_info('Repackaging apk to {0}'.format(target_file))
         self.print_info('This may take some time...')
 
-        subprocess.check_output(['apktool', 'b', '-o', target_file, base_apk_path])
+        apktool_build_cmd = ['apktool', 'b', '-o', target_file, base_apk_path]
+        if use_aapt2:
+            apktool_build_cmd.insert(1, "--use-aapt2") # apktool --use-aapt2 b ...
+        
+        subprocess.check_output(apktool_build_cmd)
 
         return target_file
 
@@ -742,13 +746,14 @@ class Patcher:
         f.write(new_manifest)
         f.close()
 
-    def sign_and_zipalign(self, apk_path):
-        self.print_info('Generating a random key...')
-        subprocess.call(
-            'keytool -genkey -keyalg RSA -keysize 2048 -validity 700 -noprompt -alias apkpatcheralias1 -dname '
-            '"CN=apk.patcher.com, OU=ID, O=APK, L=Patcher, S=Patch, C=BR" -keystore apkpatcherkeystore '
-            '-storepass password -keypass password 2> /dev/null',
-            shell=True)
+    def sign_and_zipalign(self, apk_path, keep_keystore):
+        if not os.path.isfile("apkpatcherkeystore"):
+            self.print_info('Generating a random key...')
+            subprocess.call(
+                'keytool -genkey -keyalg RSA -keysize 2048 -validity 700 -noprompt -alias apkpatcheralias1 -dname '
+                '"CN=apk.patcher.com, OU=ID, O=APK, L=Patcher, S=Patch, C=BR" -keystore apkpatcherkeystore '
+                '-storepass password -keypass password 2> /dev/null',
+                shell=True)
 
         self.print_info('Signing the patched apk...')
         subprocess.call(
@@ -756,7 +761,8 @@ class Patcher:
             '-storepass password {0} apkpatcheralias1 >/dev/null 2>&1'.format(apk_path),
             shell=True)
 
-        os.remove('apkpatcherkeystore')
+        if not keep_keystore:
+            os.remove('apkpatcherkeystore')
 
         self.print_info('The apk was signed!')
         self.print_info('Optimizing with zipalign...')
@@ -830,12 +836,16 @@ def main():
     parser.add_argument('--update-gadgets', help='Update frida-gadgets', action='store_true')
     parser.add_argument('-f', '--force-extract-resources', help='Force extract resources and manifest',
                         action='store_true')
+    parser.add_argument('--use-aapt2', help='Use aapt2 with apktool',
+                        action='store_true')
 
     parser.add_argument('-e', '--enable-user-certificates', help='Add some configs in apk to accept user certificates',
                         action='store_true')
 
     parser.add_argument('--prevent-frida-gadget', help='Does not insert frida gadget', action='store_true')
     parser.add_argument('-w', '--wait-before-repackage', help='Waits for your OK before repackage the apk',
+                        action='store_true')
+    parser.add_argument('-k', '--keep-keystore', help='Keeps generated keystore for future use',
                         action='store_true')
 
     parser.add_argument('-o', '--output-file', help='Specify the output file (patched)')
@@ -971,13 +981,9 @@ def main():
             patcher.print_info('Executing -> {0}'.format(command_to_execute))
             os.system(command_to_execute)
 
-    if args.output_file:
-        output_file_path = patcher.repackage_apk(temporary_path, apk_file_name, target_file=args.output_file)
+    output_file_path = patcher.repackage_apk(temporary_path, apk_file_name, target_file=args.output_file, use_aapt2=args.use_aapt2)
 
-    else:
-        output_file_path = patcher.repackage_apk(temporary_path, apk_file_name)
-
-    patcher.sign_and_zipalign(output_file_path)
+    patcher.sign_and_zipalign(output_file_path, args.keep_keystore)
 
     patcher.print_done('The temporary folder was not deleted. Find it at {0}'.format(temporary_path))
     patcher.print_done('Your file is located at {0}.'.format(output_file_path))
