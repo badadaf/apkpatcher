@@ -271,21 +271,21 @@ class Patcher:
                     ret = full_path
                     break
 
-        elif abi is 'arm64-v8a' or 'arm64' in abi:
+        elif abi == 'arm64-v8a' or 'arm64' in abi:
             for gadget_file in gadget_files:
                 if 'arm64' in gadget_file:
                     full_path = os.path.join(target_folder, gadget_file)
                     ret = full_path
                     break
 
-        elif abi is 'x86':
+        elif abi == 'x86':
             for gadget_file in gadget_files:
                 if 'i386' in gadget_file:
                     full_path = os.path.join(target_folder, gadget_file)
                     ret = full_path
                     break
 
-        elif abi is 'x86_64':
+        elif abi == 'x86_64':
             for gadget_file in gadget_files:
                 if 'x86_64' in gadget_file:
                     full_path = os.path.join(target_folder, gadget_file)
@@ -402,14 +402,14 @@ class Patcher:
             direct_methods_start_index = content.find('# direct methods')
             direct_methods_end_index = content.find('# virtual methods')
 
-            if direct_methods_start_index is -1 or direct_methods_end_index is -1:
+            if direct_methods_start_index == -1 or direct_methods_end_index == -1:
                 self.print_warn('Could not find direct methods.')
                 return False
 
             class_constructor_start_index = content.find('.method static constructor <clinit>()V',
                                                          direct_methods_start_index, direct_methods_end_index)
 
-            if class_constructor_start_index is -1:
+            if class_constructor_start_index == -1:
                 has_class_constructor = False
             else:
                 has_class_constructor = True
@@ -419,7 +419,7 @@ class Patcher:
                 class_constructor_end_index = content.find('.end method',
                                                            class_constructor_start_index, direct_methods_end_index)
 
-            if has_class_constructor and class_constructor_end_index is -1:
+            if has_class_constructor and class_constructor_end_index == -1:
                 self.print_warn('Could not find the end of class constructor.')
                 return False
 
@@ -430,13 +430,13 @@ class Patcher:
 
             no_prologue_case = False
             locals_start_index = -1
-            if has_class_constructor and prologue_start_index is -1:
+            if has_class_constructor and prologue_start_index == -1:
                 no_prologue_case = True
 
                 locals_start_index = content.find('.locals ',
                                                   class_constructor_start_index, class_constructor_end_index)
 
-            if no_prologue_case and locals_start_index is -1:
+            if no_prologue_case and locals_start_index == -1:
                 self.print_warn('Has class constructor. No prologue case, but no "locals 0" found.')
                 return False
 
@@ -721,14 +721,14 @@ class Patcher:
 
         start_manifest_tag = manifest_content.find('<manifest ')
 
-        if start_manifest_tag is -1:
+        if start_manifest_tag == -1:
             self.print_warn('Something wrong with Manifest file')
 
             return False
 
         end_manifest_tag = manifest_content.find('>', start_manifest_tag)
 
-        if end_manifest_tag is -1:
+        if end_manifest_tag == -1:
             self.print_warn('Something wrong with Manifest file')
 
             return False
