@@ -3,6 +3,7 @@
 
 
 import os
+import re
 import sys
 import json
 import time
@@ -106,7 +107,7 @@ class Patcher:
         # Check apktool
         if action in ['all']:
             try:
-                subprocess.check_output(['apktool', '--version'])
+                subprocess.check_output(['apktool', '--version'], stderr=subprocess.STDOUT, shell=True)
             except Exception:
                 self.print_warn('Apktool is not installed')
                 flag = False
@@ -122,7 +123,10 @@ class Patcher:
         # Check keytool
         if action in ['all']:
             try:
-                cmd_output = subprocess.check_output(['keytool;echo'], stderr=subprocess.STDOUT, shell=True)
+                try: #cant do check=False, grr
+                    cmd_output = subprocess.check_output(['keytool'], stderr=subprocess.STDOUT, shell=True)
+                except subprocess.CalledProcessError as e:
+                    cmd_output = f'{e.output} {e.stdout}'
 
                 if b'Key and Certificate' not in cmd_output:
                     flag = False
@@ -142,8 +146,11 @@ class Patcher:
 
         # Check Zipalign
         if action in ['all']:
-            cmd_output = subprocess.check_output(['zipalign;echo'],
+            try: #cant do check=False, grr
+                cmd_output = subprocess.check_output(['zipalign'],
                                                  stderr=subprocess.STDOUT, shell=True).decode('utf-8')
+            except subprocess.CalledProcessError as e:
+                cmd_output = f'{e.output} {e.stdout}'
 
             if 'zip alignment' not in cmd_output.lower():
                 flag = False
@@ -242,6 +249,17 @@ class Patcher:
         if self.VERBOSITY >= self.VERBOSITY_HIGH:
             sys.stdout.write('\n')
 
+    
+    def download_apk_from_device(self, package):
+        os.system('adb wait-for-device')
+        apkPaths = subprocess.check_output(['adb', 'shell', f'pm path "{package}"']).decode('utf-8').strip()
+        p = re.compile(r'package:(?P<path>.+)', re.MULTILINE)
+        for match in p.finditer(apkPaths):
+            path = match.group('path').replace('\r',"")
+            res = subprocess.check_output(['adb', 'pull', path]).decode('utf-8').strip()
+            self.print_info(res)
+        
+
     def get_recommended_gadget(self):
         ret = None
 
@@ -304,10 +322,10 @@ class Patcher:
             self.print_info('Extracting {0} (with resources) to {1}'.format(apk_path, destination_path))
             self.print_info('Some errors may occur while decoding resources that have framework dependencies')
 
-            subprocess.check_output(['apktool', '-f', 'd', '-o', destination_path, apk_path])
+            subprocess.check_output(['apktool', '-f', 'd', '-o', destination_path, apk_path], shell=True)
         else:
             self.print_info('Extracting {0} (without resources) to {1}'.format(apk_path, destination_path))
-            subprocess.check_output(['apktool', '-f', '-r', 'd', '-o', destination_path, apk_path])
+            subprocess.check_output(['apktool', '-f', '-r', 'd', '-o', destination_path, apk_path], shell=True)
 
     def has_permission(self, apk_path, permission_name):
         permissions = subprocess.check_output(['aapt', 'dump', 'permissions', apk_path]).decode('utf-8')
@@ -597,15 +615,20 @@ class Patcher:
 
         return True
 
+    def get_target_apk_file(self, apk_name):
+    
+        current_path = os.getcwd()
+        target_file = os.path.join(current_path, apk_name.replace('.apk', '_patched.apk'))
+
+        if os.path.isfile(target_file):
+            timestamp = str(time.time()).replace('.', '')
+            new_file_name = target_file.replace('.apk', '_{0}.apk'.format(timestamp))
+            target_file = new_file_name
+        return target_file
+        
     def repackage_apk(self, base_apk_path, apk_name, target_file=None, use_aapt2=False):
         if target_file is None:
-            current_path = os.getcwd()
-            target_file = os.path.join(current_path, apk_name.replace('.apk', '_patched.apk'))
-
-            if os.path.isfile(target_file):
-                timestamp = str(time.time()).replace('.', '')
-                new_file_name = target_file.replace('.apk', '_{0}.apk'.format(timestamp))
-                target_file = new_file_name
+            target_file = self.get_target_apk_file(apk_name)
 
         self.print_info('Repackaging apk to {0}'.format(target_file))
         self.print_info('This may take some time...')
@@ -614,7 +637,7 @@ class Patcher:
         if use_aapt2:
             apktool_build_cmd.insert(1, "--use-aapt2") # apktool --use-aapt2 b ...
         
-        subprocess.check_output(apktool_build_cmd)
+        subprocess.check_output(apktool_build_cmd, shell=True)
 
         return target_file
 
@@ -708,6 +731,44 @@ class Patcher:
 
         self.create_security_config_xml(base_path)
 
+    def manifest_set_app_attribute_to_value(self, base_dir, attribute, value):
+        manifest_path = os.path.join(base_dir, 'AndroidManifest.xml')
+        if not os.path.isfile(manifest_path):
+            self.print_warn("Couldn't find the Manifest file. Something is wrong with the apk!")
+
+            return False
+
+        f = open(manifest_path, 'r')
+        manifest_content = f.read()
+        f.close()
+
+        existingExtractNativeTag = manifest_content.find(f'android:{attribute}')
+
+        if existingExtractNativeTag != -1: #need to remove current setting
+            existingEnd1 = manifest_content.find('>', existingExtractNativeTag) #if the last tag
+            existingEnd2 = manifest_content.find(' a', existingExtractNativeTag) #if another tag follows, hopefully using same namespace;0
+            if existingEnd1 == -1 or (existingEnd2 < existingEnd1 and existingEnd2 != -1):
+                existingEnd1=existingEnd2
+            if existingEnd1 == -1:
+                self.print_warn(f'Could not find end of android:{attribute} tag. Something is wrong with the manifest!')
+                return False
+            manifest_content = manifest_content[:existingExtractNativeTag] + manifest_content[existingEnd1:]
+        appStart = '<application'
+        applicationTag = manifest_content.find(appStart)
+        if applicationTag == -1:
+            self.print_warn('Could not find application tag. Something is wrong with the manifest!')
+            return False
+        manifest_content = manifest_content[:applicationTag] + f'{appStart} android:{attribute}="{value}"' + manifest_content[applicationTag+len(appStart):]
+        f = open(manifest_path, 'w')
+        f.write(manifest_content)
+        f.close()
+
+    def manifest_set_extract_native_libs_true(self, base_dir):
+        self.print_info('Making sure the manifest has extract native libs set to true (frida-gadget is compressed will not work otherwise)...')
+        self.manifest_set_app_attribute_to_value(base_dir, 'extractNativeLibs', 'true')
+        
+
+
     def inject_permission_manifest(self, base_dir, permission):
         self.print_info('Injecting permission {0} in Manifest...'.format(permission))
 
@@ -749,32 +810,36 @@ class Patcher:
     def sign_and_zipalign(self, apk_path, keep_keystore):
         if not os.path.isfile("apkpatcherkeystore"):
             self.print_info('Generating a random key...')
-            subprocess.call(
+            subprocess.check_call(
                 'keytool -genkey -keyalg RSA -keysize 2048 -validity 700 -noprompt -alias apkpatcheralias1 -dname '
                 '"CN=apk.patcher.com, OU=ID, O=APK, L=Patcher, S=Patch, C=BR" -keystore apkpatcherkeystore '
-                '-storepass password -keypass password 2> /dev/null',
+                '-storepass password -keypass password',
                 shell=True)
 
+       
+        self.print_info('Optimizing with zipalign...')
+
+        tmp_target_file = apk_path.replace('.apk', '_tmp.apk')
+        shutil.move(apk_path, tmp_target_file)
+
+        subprocess.call('zipalign -p 4 {0} {1}'.format(tmp_target_file, apk_path), stderr=subprocess.STDOUT, shell=True)
+        os.remove(tmp_target_file)
+        self.print_info('The file was optimized!')
+
+        #apksigner
+
         self.print_info('Signing the patched apk...')
-        subprocess.call(
-            'jarsigner -sigalg SHA1withRSA -digestalg SHA1 -keystore apkpatcherkeystore '
-            '-storepass password {0} apkpatcheralias1 >/dev/null 2>&1'.format(apk_path),
+        subprocess.check_call(
+            'apksigner sign --ks apkpatcherkeystore '
+            f'--ks-pass pass:password --ks-key-alias apkpatcheralias1 {apk_path}',
             shell=True)
 
         if not keep_keystore:
             os.remove('apkpatcherkeystore')
 
         self.print_info('The apk was signed!')
-        self.print_info('Optimizing with zipalign...')
 
-        tmp_target_file = apk_path.replace('.apk', '_tmp.apk')
-        shutil.move(apk_path, tmp_target_file)
-
-        subprocess.call('zipalign 4 {0} {1}'.format(tmp_target_file, apk_path), stderr=subprocess.STDOUT, shell=True)
-
-        os.remove(tmp_target_file)
-
-        self.print_info('The file was optimized!')
+        
 
     @staticmethod
     def get_int_frida_version(str_version):
@@ -834,6 +899,7 @@ def main():
     parser.add_argument('--autoload-script', help='Auto load script')
     parser.add_argument('-v', '--verbosity', help='Verbosity level (0 to 3). Default is 3')
     parser.add_argument('--update-gadgets', help='Update frida-gadgets', action='store_true')
+    parser.add_argument('--download-apk', help='Specify name of package on phone and download the apk')
     parser.add_argument('-f', '--force-extract-resources', help='Force extract resources and manifest',
                         action='store_true')
     parser.add_argument('--use-aapt2', help='Use aapt2 with apktool',
@@ -843,6 +909,12 @@ def main():
                         action='store_true')
 
     parser.add_argument('--prevent-frida-gadget', help='Does not insert frida gadget', action='store_true')
+    parser.add_argument('--no-add-frida-lib', help='Avoid adding the frida library itself to the apk, for mutli-apk packages this may be needed on the base apk',  action='store_true')
+    parser.add_argument('--no-patch-main', help='Avoid patching the main entrypoint, for mutli-apk packages this may be needed on the arch lib apks',  action='store_true')
+    #, good also on multi-apk packages for just installing the lib on aux apks
+    parser.add_argument('--install-apk', help="Install the apk if successful, not for multi-apk packages", action='store_true')
+    parser.add_argument('--set-apk-debuggable', help="Set the apk to debuggable", action='store_true')
+    parser.add_argument('--just-sign', help="Just sign the apk incase of multi-apk packages for signing un-modified ones with same sig", action='store_true')
     parser.add_argument('-w', '--wait-before-repackage', help='Waits for your OK before repackage the apk',
                         action='store_true')
     parser.add_argument('-k', '--keep-keystore', help='Keeps generated keystore for future use',
@@ -873,6 +945,16 @@ def main():
 
         return 0
 
+    if args.download_apk:
+        patcher.download_apk_from_device(args.download_apk)
+        return 0
+    if args.just_sign:
+        output_file_path = patcher.get_target_apk_file(args.apk)
+        shutil.copyfile(args.apk, output_file_path)
+        subprocess.check_output(['zip', '-d', output_file_path, 'META-INF/*']) #deleting any existing signatures
+        patcher.sign_and_zipalign(output_file_path, args.keep_keystore)
+        patcher.print_done('Just signed apk output to: {0}.'.format(output_file_path))
+        return 0
     if not args.apk:
         parser.print_help()
 
@@ -908,17 +990,21 @@ def main():
     temporary_path = patcher.create_temp_folder_for_apk(apk_file_path)
 
     has_internet_permission = False
+    must_extract_resources = args.force_extract_resources or args.enable_user_certificates
     if not args.prevent_frida_gadget:
         has_internet_permission = patcher.has_permission(apk_file_path, patcher.INTERNET_PERMISSION)
+        if has_internet_permission:
+            must_extract_resources = True
+        if not must_extract_resources:
+            manifestData = subprocess.check_output(['aapt', 'list', '-a', apk_file_path]).decode('utf-8')
+            if not re.search(r'extractNativeLibs.+ffffffff',manifestData, re.MULTILINE):
+                must_extract_resources=True
 
-    # Will extract the resources when needed or when forced
-    if (not args.prevent_frida_gadget and not has_internet_permission) \
-            or args.enable_user_certificates or args.force_extract_resources:
 
-        patcher.extract_apk(apk_file_path, temporary_path, extract_resources=True)
+    patcher.extract_apk(apk_file_path, temporary_path, extract_resources=must_extract_resources)
 
-    else:
-        patcher.extract_apk(apk_file_path, temporary_path, extract_resources=False)
+    if args.set_apk_debuggable:
+        patcher.manifest_set_app_attribute_to_value(temporary_path, 'debuggable', 'true')
 
     if not args.prevent_frida_gadget and not has_internet_permission:
         patcher.inject_permission_manifest(temporary_path, patcher.INTERNET_PERMISSION)
@@ -927,11 +1013,12 @@ def main():
         patcher.enable_user_certificates(temporary_path)
 
     if not args.prevent_frida_gadget:
+        patcher.manifest_set_extract_native_libs_true(temporary_path)
         # START --[ INJECTING FRIDA LIB FILE AND SMALI CODE ]--
-        entrypoint_class = patcher.get_entrypoint_class_name(apk_file_path)
-        entrypoint_smali_path = patcher.get_entrypoint_smali_path(temporary_path, entrypoint_class)
-
-        patcher.insert_frida_loader(entrypoint_smali_path)
+        if not args.no_patch_main:
+            entrypoint_class = patcher.get_entrypoint_class_name(apk_file_path)
+            entrypoint_smali_path = patcher.get_entrypoint_smali_path(temporary_path, entrypoint_class)
+            patcher.insert_frida_loader(entrypoint_smali_path)
 
         if args.autoload_script:
             if not patcher.min_frida_version('10.6.33'):
@@ -947,11 +1034,18 @@ def main():
                 return 1
 
             default_config_file = patcher.get_default_config_file()
-            patcher.insert_frida_lib(temporary_path, gadget_to_use,
+
+            if (args.no_add_frida_lib):
+                patcher.print_warn('Not adding frida lib to the apk per request')
+            else:
+                patcher.insert_frida_lib(temporary_path, gadget_to_use,
                                      config_file_path=default_config_file, auto_load_script_path=script_file)
 
         else:
-            patcher.insert_frida_lib(temporary_path, gadget_to_use)
+            if (args.no_add_frida_lib):
+                patcher.print_warn('Not adding frida lib to the apk per request')
+            else:
+                patcher.insert_frida_lib(temporary_path, gadget_to_use)
         # END --[ INJECTING FRIDA LIB FILE AND SMALI CODE ]--
 
     apk_file_name = apk_file_path.split('/')[-1]
@@ -987,7 +1081,11 @@ def main():
 
     patcher.print_done('The temporary folder was not deleted. Find it at {0}'.format(temporary_path))
     patcher.print_done('Your file is located at {0}.'.format(output_file_path))
-
+    if (args.install_apk):
+        patcher.print_info('Waiting for device to install the apk...')
+        os.system('adb wait-for-device')
+        res = subprocess.check_output(['adb', 'install', output_file_path]).decode('utf-8').strip()
+        patcher.print_info(f'Installed: {res}')
     return 0
 
 
