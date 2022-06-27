@@ -5,6 +5,7 @@
 import os
 import sys
 import json
+from threading import local
 import time
 import signal
 import shutil
@@ -122,12 +123,7 @@ class Patcher:
         # Check keytool
         if action in ['all']:
             try:
-                cmd_output = subprocess.check_output(['keytool;echo'], stderr=subprocess.STDOUT, shell=True)
-
-                if b'Key and Certificate' not in cmd_output:
-                    flag = False
-                    self.print_warn('keytool is not installed')
-
+                subprocess.check_output(['keytool'], stderr=subprocess.STDOUT)
             except Exception:
                 flag = False
                 self.print_warn('keytool is not installed')
@@ -371,13 +367,9 @@ class Patcher:
 
         return final_tmp_dir
 
+
     def insert_frida_loader(self, entrypoint_smali_path, frida_lib_name='frida-gadget'):
-        partial_injection_code = '''
-    const-string v0, "<LIBFRIDA>"
-
-    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V
-
-        '''.replace('<LIBFRIDA>', frida_lib_name)
+        
 
         full_injection_code = '''
 .method static constructor <clinit>()V
@@ -452,17 +444,17 @@ class Patcher:
                 if no_prologue_case:
                     new_content = content[0:locals_end_index]
 
-                    if content[locals_end_index] == '0':
-                        new_content += '1'
-                    else:
-                        new_content += content[locals_end_index]
+                    local_nb = str(int(content[locals_end_index])+1) # TODO
+                    local_nb_plus_1 = str(int(content[locals_end_index])+2) # TODO
+
+                    new_content += local_nb_plus_1                
 
                     new_content += '\n\n    .prologue'
-                    new_content += partial_injection_code
+                    new_content += self.partial_injection_code(local_nb) # TODO
                     new_content += content[locals_end_index+1:]
                 else:
                     new_content = content[0:prologue_end_index]
-                    new_content += partial_injection_code
+                    new_content += self.partial_injection_code("0")
                     new_content += content[prologue_end_index:]
             else:
                 tmp_index = direct_methods_start_index + len('# direct methods') + 1
@@ -746,6 +738,26 @@ class Patcher:
         f.write(new_manifest)
         f.close()
 
+    def inject_extractNativeLibs_manifest(self, base_dir):
+        self.print_info('Injecting extractNativeLibs=true in Manifest...')
+
+        manifest_path = os.path.join(base_dir, 'AndroidManifest.xml')
+
+        if not os.path.isfile(manifest_path):
+            self.print_warn("Couldn't find the Manifest file. Something is wrong with the apk!")
+
+            return False
+
+        f = open(manifest_path, 'r')
+        manifest_content = f.read()
+        f.close()
+
+        new_manifest = manifest_content.replace('android:extractNativeLibs="false"','android:extractNativeLibs="true"')
+
+        f = open(manifest_path, 'w')
+        f.write(new_manifest)
+        f.close()
+
     def sign_and_zipalign(self, apk_path, keep_keystore):
         if not os.path.isfile("apkpatcherkeystore"):
             self.print_info('Generating a random key...')
@@ -816,6 +828,17 @@ class Patcher:
         f.close()
 
         return path
+
+
+    # TODO
+    @staticmethod
+    def partial_injection_code(local_nb):
+        return '''
+    const-string v<LOCAL_NB>, "frida-gadget"
+
+    invoke-static {v<LOCAL_NB>}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V
+
+        '''.replace('<LOCAL_NB>', local_nb)
 
 
 def signal_handler(_signal_id, _frame):
@@ -922,6 +945,9 @@ def main():
 
     if not args.prevent_frida_gadget and not has_internet_permission:
         patcher.inject_permission_manifest(temporary_path, patcher.INTERNET_PERMISSION)
+
+    patcher.inject_extractNativeLibs_manifest(temporary_path)
+
 
     if args.enable_user_certificates:
         patcher.enable_user_certificates(temporary_path)
