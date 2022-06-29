@@ -773,20 +773,32 @@ class Patcher:
             '-storepass password {0} apkpatcheralias1 >/dev/null 2>&1'.format(apk_path),
             shell=True)
 
-        if not keep_keystore:
-            os.remove('apkpatcherkeystore')
-
-        self.print_info('The apk was signed!')
+        
+        
         self.print_info('Optimizing with zipalign...')
 
         tmp_target_file = apk_path.replace('.apk', '_tmp.apk')
         shutil.move(apk_path, tmp_target_file)
 
-        subprocess.call('zipalign 4 {0} {1}'.format(tmp_target_file, apk_path), stderr=subprocess.STDOUT, shell=True)
+        subprocess.call('zipalign -p -f 4 {0} {1}'.format(tmp_target_file, apk_path), stderr=subprocess.STDOUT, shell=True)
 
         os.remove(tmp_target_file)
 
         self.print_info('The file was optimized!')
+
+
+
+
+        self.print_info('Signing with v2 signature...')
+        subprocess.call(
+            'apksigner sign --ks-key-alias apkpatcheralias1 --ks apkpatcherkeystore --ks-pass pass:password {0}'.format(apk_path),
+            shell=True)
+
+        if not keep_keystore:
+            os.remove('apkpatcherkeystore')
+
+        self.print_info('The apk was signed!')
+        
 
     @staticmethod
     def get_int_frida_version(str_version):
