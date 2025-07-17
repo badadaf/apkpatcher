@@ -729,8 +729,6 @@ class Patcher:
         new_manifest += ' android:debuggable="true"'
         new_manifest += manifest_content[end_application_tag:]
 
-        print(new_manifest)
-
         with open(manifest_path, 'w') as manifest_file:
             manifest_file.write(new_manifest)
 
