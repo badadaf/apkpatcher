@@ -307,7 +307,7 @@ class Patcher:
             subprocess.check_output(['apktool', '-f', 'd', '-o', destination_path, apk_path])
         else:
             self.print_info('Extracting {0} (without resources) to {1}'.format(apk_path, destination_path))
-            subprocess.check_output(['apktool', '-f', '-r', 'd', '-o', destination_path, apk_path])
+            subprocess.check_output(['apktool', '-f', 'd', '-o', destination_path, apk_path])
 
     def has_permission(self, apk_path, permission_name):
         permissions = subprocess.check_output(['aapt', 'dump', 'permissions', apk_path]).decode('utf-8')
@@ -708,6 +708,34 @@ class Patcher:
 
         self.create_security_config_xml(base_path)
 
+
+    def inject_android_debuggable_label(self, base_dir):
+        self.print_info('Injecting Debbugable label to debug apk...')
+
+        manifest_path = os.path.join(base_dir, 'AndroidManifest.xml')
+
+        if not os.path.isfile(manifest_path):
+            self.print_warn("Couldn't find the Manifest file. Something is wrong with the apk!")
+
+            return False
+
+        with open(manifest_path, 'r') as manifest_file:
+            manifest_content = manifest_file.read()
+
+            start_application_tag = manifest_content.find('<application ')
+            end_application_tag = manifest_content.find('>', start_application_tag)
+
+        new_manifest = manifest_content[:end_application_tag]
+        new_manifest += ' android:debuggable="true"'
+        new_manifest += manifest_content[end_application_tag:]
+
+        print(new_manifest)
+
+        with open(manifest_path, 'w') as manifest_file:
+            manifest_file.write(new_manifest)
+
+        self.print_info('The Debuggable label was added!')
+
     def inject_permission_manifest(self, base_dir, permission):
         self.print_info('Injecting permission {0} in Manifest...'.format(permission))
 
@@ -848,7 +876,11 @@ def main():
     parser.add_argument('-k', '--keep-keystore', help='Keeps generated keystore for future use',
                         action='store_true')
 
+    parser.add_argument('--add-debuggable', help='Add android:debbugable=true tag to manifest', action='store_true')
+
+
     parser.add_argument('-o', '--output-file', help='Specify the output file (patched)')
+
 
     group = parser.add_argument_group('Execute command before repackage')
     group.add_argument('-x', '--exec-before-repackage', help='Specify a command to execute before repackage')
@@ -925,6 +957,9 @@ def main():
 
     if args.enable_user_certificates:
         patcher.enable_user_certificates(temporary_path)
+
+    if args.prevent_frida_gadget and args.add_debuggable:
+        patcher.inject_android_debuggable_label(temporary_path)
 
     if not args.prevent_frida_gadget:
         # START --[ INJECTING FRIDA LIB FILE AND SMALI CODE ]--
